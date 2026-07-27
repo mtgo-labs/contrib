@@ -25,7 +25,9 @@ client, err := raw.NewClient(raw.Config{
 
 // Direct repository access
 store.AuthKeys.Set(dcID, key)
-store.KV.Set("my_key", value)
+if err := store.KV.Set("my_key", value); err != nil {
+    log.Fatal(err)
+}
 ```
 
 Dependencies: `modernc.org/sqlite`.

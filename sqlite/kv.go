@@ -46,8 +46,11 @@ func (r *KVRepo) prepare() error {
 }
 
 // Set stores a value under the given key.
-func (r *KVRepo) Set(key string, value []byte) {
-	r.setStmt.Exec(key, value)
+func (r *KVRepo) Set(key string, value []byte) error {
+	if _, err := r.setStmt.Exec(key, value); err != nil {
+		return fmt.Errorf("sqlite: kv.set %q: %w", key, err)
+	}
+	return nil
 }
 
 // Get returns the value for the given key, or nil if not found.

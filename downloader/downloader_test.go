@@ -182,3 +182,46 @@ func TestCDNRedirectType(t *testing.T) {
 		EncryptionIv:  []byte{3},
 	}
 }
+
+func TestStallWatcherTracksProgressDeadline(t *testing.T) {
+	const timeout = 500 * time.Millisecond
+
+	var progress stallProgress
+	progress.started = time.Now()
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	go NewDownloader(nil).stallWatcher(ctx, cancel, &progress, timeout)
+
+	select {
+	case <-ctx.Done():
+		t.Fatal("stall watcher cancelled before initial timeout")
+	case <-time.After(timeout / 4):
+	}
+
+	progressAt := time.Now()
+	if got := progress.add(64); got != 64 {
+		t.Fatalf("downloaded = %d, want 64", got)
+	}
+	if progress.lastProgress.Load() <= 0 {
+		t.Fatal("progress timestamp was not recorded")
+	}
+
+	select {
+	case <-ctx.Done():
+		if elapsed := time.Since(progressAt); elapsed < timeout {
+			t.Fatalf("stall watcher cancelled %v after progress, want at least %v", elapsed, timeout)
+		}
+		return
+	case <-time.After(3 * timeout / 4):
+	}
+
+	select {
+	case <-ctx.Done():
+		if elapsed := time.Since(progressAt); elapsed < timeout {
+			t.Fatalf("stall watcher cancelled %v after progress, want at least %v", elapsed, timeout)
+		}
+	case <-time.After(2 * timeout):
+		t.Fatal("stall watcher did not cancel after progress stopped")
+	}
+}

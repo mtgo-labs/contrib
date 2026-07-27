@@ -17,6 +17,7 @@ import (
 	"encoding/binary"
 	"encoding/hex"
 	"fmt"
+	"hash"
 	"io"
 	"net/http"
 	"os"
@@ -307,16 +308,14 @@ func (u *Uploader) resolveInput(input Input) (io.Reader, string, int64, error) {
 // uploadSmall uploads a small file (<=10MB) with MD5 checksum.
 func (u *Uploader) uploadSmall(ctx context.Context, reader io.Reader, fileID int64, fileName string, fileSize int64, mimeType string, partSize int, kind raw.ConnectionKind, workers int) (*UploadedFile, error) {
 	h := md5.New()
-	lockedReader := &lockedReader{r: reader}
+	lockedReader := &lockedReader{r: reader, checksum: h}
 
 	var (
-		partNum   atomic.Int32
-		uploaded  atomic.Int64
-		readErr   error
-		readErrMu sync.Mutex
-		readEnded atomic.Bool
-		wg        sync.WaitGroup
-		firstErr  error
+		uploaded   atomic.Int64
+		readErr    error
+		readErrMu  sync.Mutex
+		wg         sync.WaitGroup
+		firstErr   error
 		firstErrMu sync.Mutex
 	)
 
@@ -347,32 +346,15 @@ func (u *Uploader) uploadSmall(ctx context.Context, reader io.Reader, fileID int
 				return
 			}
 
-			idx := partNum.Add(1) - 1
-
-			// Read the next part under the lock.
-			lockedReader.mu.Lock()
-			if readEnded.Load() {
-				lockedReader.mu.Unlock()
-				return
-			}
-			buf := make([]byte, partSize)
-			n, err := io.ReadFull(lockedReader.r, buf)
-			lockedReader.mu.Unlock()
-
+			idx, part, err := lockedReader.readPart(partSize)
 			if err != nil && err != io.ErrUnexpectedEOF && err != io.EOF {
 				setReadErr(err)
 				setFirstErr(fmt.Errorf("uploader: read part %d: %w", idx, err))
 				return
 			}
-
-			part := buf[:n]
-			if n == 0 {
-				readEnded.Store(true)
+			if len(part) == 0 {
 				return
 			}
-
-			h.Write(part)
-
 			req := &tl.UploadSaveFilePartRequest{
 				FileID:   fileID,
 				FilePart: idx,
@@ -386,13 +368,12 @@ func (u *Uploader) uploadSmall(ctx context.Context, reader io.Reader, fileID int
 				return
 			}
 
-			uploaded.Add(int64(n))
+			uploaded.Add(int64(len(part)))
 			if u.progress != nil {
 				u.progress(uploaded.Load(), fileSize)
 			}
 
 			if err == io.ErrUnexpectedEOF || err == io.EOF {
-				readEnded.Store(true)
 				return
 			}
 		}
@@ -424,7 +405,7 @@ func (u *Uploader) uploadSmall(ctx context.Context, reader io.Reader, fileID int
 	return &UploadedFile{
 		InputFile: &tl.InputFile{
 			ID:          fileID,
-			Parts:       partNum.Load(),
+			Parts:       lockedReader.parts,
 			Name:        fileName,
 			Md5Checksum: md5Hex,
 		},
@@ -446,13 +427,11 @@ func (u *Uploader) uploadBig(ctx context.Context, reader io.Reader, fileID int64
 	}
 
 	var (
-		partNum   atomic.Int32
-		uploaded  atomic.Int64
-		readErr   error
-		readErrMu sync.Mutex
-		readEnded atomic.Bool
-		wg        sync.WaitGroup
-		firstErr  error
+		uploaded   atomic.Int64
+		readErr    error
+		readErrMu  sync.Mutex
+		wg         sync.WaitGroup
+		firstErr   error
 		firstErrMu sync.Mutex
 	)
 
@@ -483,32 +462,20 @@ func (u *Uploader) uploadBig(ctx context.Context, reader io.Reader, fileID int64
 				return
 			}
 
-			idx := partNum.Add(1) - 1
-
-			lockedReader.mu.Lock()
-			if readEnded.Load() {
-				lockedReader.mu.Unlock()
-				return
-			}
-			buf := make([]byte, partSize)
-			n, err := io.ReadFull(lockedReader.r, buf)
-			lockedReader.mu.Unlock()
-
+			idx, part, err := lockedReader.readPart(partSize)
 			if err != nil && err != io.ErrUnexpectedEOF && err != io.EOF {
 				setReadErr(err)
 				setFirstErr(fmt.Errorf("uploader: read part %d: %w", idx, err))
 				return
 			}
-			if n == 0 {
-				readEnded.Store(true)
+			if len(part) == 0 {
 				return
 			}
-
 			req := &tl.UploadSaveBigFilePartRequest{
 				FileID:         fileID,
 				FilePart:       idx,
 				FileTotalParts: totalParts,
-				Bytes:          buf[:n],
+				Bytes:          part,
 			}
 
 			if _, rpcErr := raw.InvokeWithOptions(ctx, u.client, req, raw.InvokeOptions{
@@ -518,13 +485,12 @@ func (u *Uploader) uploadBig(ctx context.Context, reader io.Reader, fileID int64
 				return
 			}
 
-			uploaded.Add(int64(n))
+			uploaded.Add(int64(len(part)))
 			if u.progress != nil {
 				u.progress(uploaded.Load(), fileSize)
 			}
 
 			if err == io.ErrUnexpectedEOF || err == io.EOF {
-				readEnded.Store(true)
 				return
 			}
 		}
@@ -553,7 +519,7 @@ func (u *Uploader) uploadBig(ctx context.Context, reader io.Reader, fileID int64
 	return &UploadedFile{
 		InputFile: &tl.InputFileBig{
 			ID:    fileID,
-			Parts: partNum.Load(),
+			Parts: lockedReader.parts,
 			Name:  fileName,
 		},
 		FileName: fileName,
@@ -565,8 +531,44 @@ func (u *Uploader) uploadBig(ctx context.Context, reader io.Reader, fileID int64
 // lockedReader wraps an io.Reader with a mutex, matching mtcute's AsyncLock
 // pattern: reads are serialized while RPC sends happen in parallel.
 type lockedReader struct {
-	mu sync.Mutex
-	r  io.Reader
+	mu       sync.Mutex
+	r        io.Reader
+	checksum hash.Hash
+	parts    int32
+	ended    bool
+}
+
+// readPart serializes source reads, part numbering, and checksum updates.
+func (r *lockedReader) readPart(partSize int) (idx int32, part []byte, err error) {
+	r.mu.Lock()
+	if r.ended {
+		r.mu.Unlock()
+		return 0, nil, io.EOF
+	}
+
+	buf := make([]byte, partSize)
+	n, err := io.ReadFull(r.r, buf)
+	idx = r.parts
+	if err != nil && err != io.ErrUnexpectedEOF && err != io.EOF {
+		r.mu.Unlock()
+		return idx, nil, err
+	}
+	if n == 0 {
+		r.ended = true
+		r.mu.Unlock()
+		return idx, nil, err
+	}
+
+	part = buf[:n]
+	r.parts++
+	if r.checksum != nil {
+		r.checksum.Write(part)
+	}
+	if err == io.ErrUnexpectedEOF || err == io.EOF {
+		r.ended = true
+	}
+	r.mu.Unlock()
+	return idx, part, err
 }
 
 // byteReader is an io.Reader over an in-memory byte slice (for buffered streams).
@@ -598,6 +600,7 @@ func detectMimeType(r io.Reader) (string, io.Reader) {
 	mime := http.DetectContentType(buf[:n])
 	return mime, io.MultiReader(bytes.NewReader(buf[:n]), r)
 }
+
 // computePartSize computes an appropriate part size for a file, growing
 // it to stay under the maximum part count.
 func computePartSize(fileSize int64, currentPartSize int) int {

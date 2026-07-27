@@ -8,12 +8,13 @@ import (
 	_ "modernc.org/sqlite"
 )
 
-
 const migrationsTable = "mtgo_migrations"
+
 type migration struct {
 	repo    string
 	version int
 	sql     string
+	run     func(*sql.Tx) error
 }
 
 // driver manages a single SQLite database connection with migration support
@@ -47,6 +48,10 @@ func openDriver(path string) (*driver, error) {
 		db.Close()
 		return nil, err
 	}
+	if err := d.loadMigrationVersions(); err != nil {
+		db.Close()
+		return nil, err
+	}
 
 	return d, nil
 }
@@ -62,22 +67,13 @@ func (d *driver) ensureMigrationsTable() error {
 	return nil
 }
 
-
-// load opens the database, applies pending migrations, and runs onLoad callbacks.
-func (d *driver) load() error {
-	d.mu.Lock()
-	defer d.mu.Unlock()
-	if d.loaded {
-		return nil
-	}
-	d.loaded = true
-
-	// Check existing migration versions
+func (d *driver) loadMigrationVersions() error {
 	rows, err := d.db.Query(`SELECT repo, version FROM ` + migrationsTable)
 	if err != nil {
 		return fmt.Errorf("sqlite: query migrations: %w", err)
 	}
 	defer rows.Close()
+
 	for rows.Next() {
 		var repo string
 		var version int
@@ -89,14 +85,23 @@ func (d *driver) load() error {
 	if err := rows.Err(); err != nil {
 		return fmt.Errorf("sqlite: iter migrations: %w", err)
 	}
+	return nil
+}
 
-	// Run onLoad callbacks (prepared statements, etc.)
+// load runs the registered onLoad callbacks after migrations have completed.
+func (d *driver) load() error {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	if d.loaded {
+		return nil
+	}
+
 	for _, cb := range d.onLoad {
 		if err := cb(); err != nil {
 			return err
 		}
 	}
-
+	d.loaded = true
 	return nil
 }
 
@@ -104,21 +109,40 @@ func (d *driver) registerOnLoad(cb func() error) {
 	d.onLoad = append(d.onLoad, cb)
 }
 
-// applyMigrations applies pending migrations. Called before onLoad.
+// applyMigrations applies each pending migration and records its version in
+// the same transaction.
 func (d *driver) applyMigrations(migs []migration) error {
 	for _, m := range migs {
 		current := d.migrated[m.repo]
 		if current >= m.version {
 			continue
 		}
-		if _, err := d.db.Exec(m.sql); err != nil {
-			return fmt.Errorf("sqlite: migration %s v%d: %w", m.repo, m.version, err)
+
+		tx, err := d.db.Begin()
+		if err != nil {
+			return fmt.Errorf("sqlite: begin migration %s v%d: %w", m.repo, m.version, err)
 		}
-		if _, err := d.db.Exec(
+		if m.sql != "" {
+			if _, err := tx.Exec(m.sql); err != nil {
+				_ = tx.Rollback()
+				return fmt.Errorf("sqlite: migration %s v%d: %w", m.repo, m.version, err)
+			}
+		}
+		if m.run != nil {
+			if err := m.run(tx); err != nil {
+				_ = tx.Rollback()
+				return fmt.Errorf("sqlite: migration %s v%d: %w", m.repo, m.version, err)
+			}
+		}
+		if _, err := tx.Exec(
 			`INSERT OR REPLACE INTO `+migrationsTable+` (repo, version) VALUES (?, ?)`,
 			m.repo, m.version,
 		); err != nil {
+			_ = tx.Rollback()
 			return fmt.Errorf("sqlite: record migration %s v%d: %w", m.repo, m.version, err)
+		}
+		if err := tx.Commit(); err != nil {
+			return fmt.Errorf("sqlite: commit migration %s v%d: %w", m.repo, m.version, err)
 		}
 		d.migrated[m.repo] = m.version
 	}

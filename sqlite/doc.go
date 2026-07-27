@@ -27,5 +27,7 @@
 // The package also exposes repository types for direct use:
 //
 //	store.AuthKeys.Set(dcID, key)
-//	store.KV.Set("my_key", value)
+//	if err := store.KV.Set("my_key", value); err != nil {
+//	    log.Fatal(err)
+//	}
 package sqlite

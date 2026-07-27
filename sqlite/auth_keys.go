@@ -131,6 +131,20 @@ func (r *AuthKeysRepo) DeleteByDc(dc int) error {
 
 // DeleteAll deletes all auth keys.
 func (r *AuthKeysRepo) DeleteAll() error {
-	_, err := r.delAllStmt.Exec()
-	return err
+	tx, err := r.drv.db.Begin()
+	if err != nil {
+		return fmt.Errorf("sqlite: auth_keys.deleteAll: begin: %w", err)
+	}
+	if _, err := tx.Stmt(r.delAllStmt).Exec(); err != nil {
+		_ = tx.Rollback()
+		return fmt.Errorf("sqlite: auth_keys.deleteAll: delete permanent keys: %w", err)
+	}
+	if _, err := tx.Exec(`DELETE FROM temp_auth_keys`); err != nil {
+		_ = tx.Rollback()
+		return fmt.Errorf("sqlite: auth_keys.deleteAll: delete temporary keys: %w", err)
+	}
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("sqlite: auth_keys.deleteAll: commit: %w", err)
+	}
+	return nil
 }

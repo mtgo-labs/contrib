@@ -13,8 +13,8 @@ import (
 	"strings"
 	"time"
 
-	"github.com/mtgo-labs/raw"
 	"github.com/mtgo-labs/contrib/retry"
+	"github.com/mtgo-labs/raw"
 	"github.com/mtgo-labs/raw/tl"
 )
 
@@ -63,8 +63,9 @@ type RetryOptions struct {
 	// MaxAttempts is the maximum number of RPC attempts. Values <= 0
 	// default to 3.
 	MaxAttempts int
-	// Backoff computes the wait duration between attempts.
-	Backoff retry.Backoff
+	// Backoff creates an independent backoff for each RPC invocation. The
+	// factory must be safe to call concurrently.
+	Backoff func() retry.Backoff
 }
 
 // NewRetryMiddleware returns a middleware that retries failed RPCs with
@@ -79,7 +80,10 @@ func NewRetryMiddleware(opts RetryOptions) raw.Middleware {
 				maxAttempts = 3
 			}
 
-			b := opts.Backoff
+			var b retry.Backoff
+			if opts.Backoff != nil {
+				b = opts.Backoff()
+			}
 			if b != nil {
 				b.Reset()
 			}

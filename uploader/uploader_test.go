@@ -3,10 +3,12 @@ package uploader
 import (
 	"bytes"
 	"context"
+	"crypto/md5"
 	"io"
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 
 	"github.com/mtgo-labs/raw/tl"
@@ -319,6 +321,135 @@ func TestNewUploaderDefaults(t *testing.T) {
 	}
 }
 
+func TestLockedReaderConcurrentReadPart(t *testing.T) {
+	const partSize = 8
+
+	tests := []struct {
+		name string
+		size int
+	}{
+		{name: "exact multiple", size: 4 * partSize},
+		{name: "short final part", size: 3*partSize + 3},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			data := make([]byte, tt.size)
+			for i := range data {
+				data[i] = byte(i)
+			}
+
+			checksum := md5.New()
+			reader := &lockedReader{
+				r:        bytes.NewReader(data),
+				checksum: checksum,
+			}
+			wantParts := (len(data) + partSize - 1) / partSize
+			workers := wantParts + 4
+			start := make(chan struct{})
+			results := make(chan struct {
+				idx  int32
+				part []byte
+				err  error
+			}, workers)
+
+			var wg sync.WaitGroup
+			wg.Add(workers)
+			for range workers {
+				go func() {
+					defer wg.Done()
+					<-start
+					idx, part, err := reader.readPart(partSize)
+					results <- struct {
+						idx  int32
+						part []byte
+						err  error
+					}{idx: idx, part: part, err: err}
+				}()
+			}
+			close(start)
+			wg.Wait()
+			close(results)
+
+			ordered := make([][]byte, wantParts)
+			seen := make([]bool, wantParts)
+			nonEmptyParts := 0
+			for result := range results {
+				if result.err != nil && result.err != io.EOF && result.err != io.ErrUnexpectedEOF {
+					t.Errorf("readPart() error = %v", result.err)
+					continue
+				}
+				if len(result.part) == 0 {
+					if result.err != io.EOF {
+						t.Errorf("empty read error = %v, want EOF", result.err)
+					}
+					continue
+				}
+
+				nonEmptyParts++
+				slot := int(result.idx)
+				if slot < 0 || slot >= len(ordered) {
+					t.Errorf("part index = %d, want [0, %d)", result.idx, len(ordered))
+					continue
+				}
+				if seen[slot] {
+					t.Errorf("duplicate part index %d", result.idx)
+					continue
+				}
+				seen[slot] = true
+				ordered[slot] = result.part
+			}
+
+			for idx, ok := range seen {
+				if !ok {
+					t.Errorf("missing part index %d", idx)
+				}
+			}
+			if got, want := reader.parts, int32(nonEmptyParts); got != want {
+				t.Errorf("Parts = %d, non-empty parts = %d", got, want)
+			}
+			if nonEmptyParts != wantParts {
+				t.Errorf("non-empty parts = %d, want %d", nonEmptyParts, wantParts)
+			}
+
+			joined := make([]byte, 0, len(data))
+			for _, part := range ordered {
+				joined = append(joined, part...)
+			}
+			if !bytes.Equal(joined, data) {
+				t.Errorf("ordered parts = %x, want %x", joined, data)
+			}
+
+			wantChecksum := md5.Sum(data)
+			if got := checksum.Sum(nil); !bytes.Equal(got, wantChecksum[:]) {
+				t.Errorf("MD5 = %x, want %x", got, wantChecksum)
+			}
+		})
+	}
+}
+
+func TestLockedReaderReadPartReturnsUnlocked(t *testing.T) {
+	tests := []struct {
+		name string
+		data []byte
+	}{
+		{name: "full part", data: []byte("ab")},
+		{name: "short final part", data: []byte("a")},
+		{name: "empty EOF"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			reader := &lockedReader{r: bytes.NewReader(tt.data)}
+			_, _, _ = reader.readPart(2)
+			if !reader.mu.TryLock() {
+				t.Fatal("readPart returned with reader mutex locked")
+			}
+			reader.mu.Unlock()
+		})
+	}
+}
+
 func TestInputFileLocationTypes(t *testing.T) {
 	var _ tl.InputFileLocationClass = &tl.InputFileLocation{
 		VolumeID:      1,
@@ -327,8 +458,8 @@ func TestInputFileLocationTypes(t *testing.T) {
 		FileReference: []byte{1},
 	}
 	var _ tl.InputFileLocationClass = &tl.InputPeerPhotoFileLocation{
-		Big:    false,
-		Peer:   &tl.InputPeerUser{UserID: 1, AccessHash: 2},
+		Big:     false,
+		Peer:    &tl.InputPeerUser{UserID: 1, AccessHash: 2},
 		PhotoID: 456,
 	}
 	var _ tl.StorageFileTypeClass = &tl.StorageFileJPEG{}

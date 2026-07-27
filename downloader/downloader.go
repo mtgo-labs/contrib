@@ -117,12 +117,13 @@ func (d *Downloader) downloadSequential(ctx context.Context, location tl.InputFi
 	kind := d.connectionKind(0)
 	partSize := d.partSize
 	var fileType tl.StorageFileTypeClass
-	var downloaded int64
+	var progress stallProgress
 
 	if d.stallTimeout > 0 {
+		progress.started = time.Now()
 		stallCtx, stallCancel := context.WithCancel(ctx)
 		defer stallCancel()
-		go d.stallWatcher(stallCtx, stallCancel, &downloaded, d.stallTimeout)
+		go d.stallWatcher(stallCtx, stallCancel, &progress, d.stallTimeout)
 		ctx = stallCtx
 	}
 
@@ -141,7 +142,7 @@ func (d *Downloader) downloadSequential(ctx context.Context, location tl.InputFi
 			Precise:      offset != 0,
 			CDNSupported: false,
 			Location:     location,
-			Offset:       offset + downloaded,
+			Offset:       offset + progress.downloaded.Load(),
 			Limit:        int32(partSize),
 		}
 
@@ -164,7 +165,7 @@ func (d *Downloader) downloadSequential(ctx context.Context, location tl.InputFi
 					return nil, fmt.Errorf("downloader: file reference expired (FILEREF_UPGRADE_NEEDED)")
 				}
 			}
-			return nil, fmt.Errorf("downloader: getFile at offset %d: %w", offset+downloaded, err)
+			return nil, fmt.Errorf("downloader: getFile at offset %d: %w", offset+progress.downloaded.Load(), err)
 		}
 
 		switch r := result.(type) {
@@ -179,9 +180,9 @@ func (d *Downloader) downloadSequential(ctx context.Context, location tl.InputFi
 			if _, err := w.Write(chunk); err != nil {
 				return nil, fmt.Errorf("downloader: write: %w", err)
 			}
-			downloaded += int64(len(chunk))
+			current := progress.add(int64(len(chunk)))
 			if d.progress != nil {
-				d.progress(downloaded, -1)
+				d.progress(current, -1)
 			}
 			if len(chunk) < partSize {
 				return fileType, nil
@@ -197,6 +198,9 @@ func (d *Downloader) downloadSequential(ctx context.Context, location tl.InputFi
 func (d *Downloader) downloadParallel(ctx context.Context, location tl.InputFileLocationClass, offset int64, w io.WriterAt) (tl.StorageFileTypeClass, error) {
 	dcID := d.dcID
 	kind := d.connectionKind(0)
+	var routeMu sync.RWMutex
+	var routeConnectErr error
+	var progress stallProgress
 	partSize := d.partSize
 
 	if d.stallTimeout > 0 {
@@ -212,7 +216,6 @@ func (d *Downloader) downloadParallel(ctx context.Context, location tl.InputFile
 
 	var (
 		mu             sync.Mutex
-		cond           = sync.NewCond(&mu)
 		buffer         = make(map[int][]byte)
 		nextChunkIdx   int
 		workerChunkIdx int
@@ -243,20 +246,45 @@ func (d *Downloader) downloadParallel(ctx context.Context, location tl.InputFile
 				Limit:        int32(partSize),
 			}
 
+			routeMu.RLock()
+			callDCID, callKind := dcID, kind
+			connectErr := routeConnectErr
+			routeMu.RUnlock()
+			if connectErr != nil {
+				return nil, connectErr
+			}
+
 			result, err := raw.InvokeWithOptions(ctx, d.client, req, raw.InvokeOptions{
-				DCID: dcID, Kind: kind,
+				DCID: callDCID, Kind: callKind,
 			})
 			if err != nil {
 				if rpcErr, ok := tgerr.As(err); ok {
 					switch {
 					case rpcErr.IsType(tgerr.ErrFileMigrate):
-						if newDC, mok := rpcErr.MigrationDC(); mok && newDC != dcID {
-							dcID = newDC
-							kind = d.connectionKind(0)
-							if connectErr := d.client.ConnectDCWithKind(ctx, dcID, kind); connectErr != nil {
+						if newDC, mok := rpcErr.MigrationDC(); mok {
+							routeMu.Lock()
+							switch {
+							case routeConnectErr != nil:
+								connectErr := routeConnectErr
+								routeMu.Unlock()
 								return nil, connectErr
+							case dcID != callDCID:
+								routeMu.Unlock()
+								continue
+							case newDC != callDCID:
+								newKind := d.connectionKind(0)
+								connectErr := d.client.ConnectDCWithKind(ctx, newDC, newKind)
+								if connectErr != nil {
+									routeConnectErr = connectErr
+									routeMu.Unlock()
+									return nil, connectErr
+								}
+								dcID, kind = newDC, newKind
+								routeMu.Unlock()
+								continue
+							default:
+								routeMu.Unlock()
 							}
-							continue
 						}
 					case tgerr.IsFileRefUpgradeNeeded(err):
 						return nil, fmt.Errorf("downloader: file reference expired")
@@ -267,6 +295,7 @@ func (d *Downloader) downloadParallel(ctx context.Context, location tl.InputFile
 
 			switch r := result.(type) {
 			case *tl.UploadFile:
+				progress.add(int64(len(r.Bytes)))
 				mu.Lock()
 				if fileType == nil {
 					fileType = r.Type
@@ -281,9 +310,9 @@ func (d *Downloader) downloadParallel(ctx context.Context, location tl.InputFile
 		}
 	}
 
-	var stallDownloaded int64
 	if d.stallTimeout > 0 {
-		go d.stallWatcher(ctx, cancel, &stallDownloaded, d.stallTimeout)
+		progress.started = time.Now()
+		go d.stallWatcher(ctx, cancel, &progress, d.stallTimeout)
 	}
 
 	downloadWorker := func() {
@@ -325,7 +354,6 @@ func (d *Downloader) downloadParallel(ctx context.Context, location tl.InputFile
 				return
 			}
 			buffer[chunkIdx] = data
-			atomic.StoreInt64(&stallDownloaded, atomic.LoadInt64(&stallDownloaded)+int64(len(data)))
 
 			for {
 				chunk, ok := buffer[nextChunkIdx]
@@ -355,12 +383,10 @@ func (d *Downloader) downloadParallel(ctx context.Context, location tl.InputFile
 				nextChunkIdx++
 				if len(chunk) < partSize {
 					ended = true
-					cond.Broadcast()
 					mu.Unlock()
 					return
 				}
 			}
-			cond.Broadcast()
 			mu.Unlock()
 		}
 	}
@@ -377,21 +403,36 @@ func (d *Downloader) downloadParallel(ctx context.Context, location tl.InputFile
 	return fileType, nil
 }
 
-func (d *Downloader) stallWatcher(ctx context.Context, cancel context.CancelFunc, downloaded *int64, timeout time.Duration) {
-	ticker := time.NewTicker(timeout / 2)
-	defer ticker.Stop()
-	var last int64
+type stallProgress struct {
+	started      time.Time
+	downloaded   atomic.Int64
+	lastProgress atomic.Int64
+}
+
+func (p *stallProgress) add(n int64) int64 {
+	if !p.started.IsZero() {
+		p.lastProgress.Store(time.Since(p.started).Nanoseconds())
+	}
+	return p.downloaded.Add(n)
+}
+
+func (d *Downloader) stallWatcher(ctx context.Context, cancel context.CancelFunc, progress *stallProgress, timeout time.Duration) {
+	timer := time.NewTimer(timeout)
+	defer timer.Stop()
+
 	for {
 		select {
 		case <-ctx.Done():
 			return
-		case <-ticker.C:
-			current := atomic.LoadInt64(downloaded)
-			if current == last {
+		case <-timer.C:
+			progressAt := time.Duration(progress.lastProgress.Load())
+			elapsed := time.Since(progress.started) - progressAt
+			remaining := timeout - elapsed
+			if remaining <= 0 {
 				cancel()
 				return
 			}
-			last = current
+			timer.Reset(remaining)
 		}
 	}
 }

@@ -1,6 +1,8 @@
 package device
 
 import (
+	"fmt"
+	"strings"
 	"sync"
 	"testing"
 )
@@ -183,7 +185,6 @@ func TestProfileApplyAllFields(t *testing.T) {
 	}
 }
 
-
 func TestToInitConnection(t *testing.T) {
 	p := TelegramMacOS()
 	ic := p.ToInitConnection()
@@ -242,3 +243,133 @@ func TestConcurrentGenerate(t *testing.T) {
 	wg.Wait()
 }
 
+func TestMacOSFromIdentifier(t *testing.T) {
+	tests := []struct {
+		identifier string
+		want       string
+	}{
+		{"MacBookPro16,4", "MacBook Pro"},
+		{"MacBookAir10,1", "MacBook Air"},
+		{"MacBook10,1", "MacBook"},
+		{"iMac20,2", "iMac"},
+		{"iMacPro1,1", "iMac Pro"},
+		{"Macmini9,1", "Mac mini"},
+		{"MacPro7,1", "Mac Pro"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.identifier, func(t *testing.T) {
+			if got := macOSFromIdentifier(tt.identifier); got != tt.want {
+				t.Errorf("macOSFromIdentifier(%q) = %q, want %q", tt.identifier, got, tt.want)
+			}
+		})
+	}
+}
+
+func TestMacOSDeviceModelsCanonical(t *testing.T) {
+	canonical := map[string]bool{
+		"MacBook Pro": true,
+		"MacBook Air": true,
+		"MacBook":     true,
+		"iMac":        true,
+		"iMac Pro":    true,
+		"Mac mini":    true,
+		"Mac Pro":     true,
+	}
+
+	for _, model := range macOSDeviceModels {
+		if model == "" {
+			t.Error("macOSDeviceModels contains an empty model")
+		}
+		if strings.Contains(model, ",") {
+			t.Errorf("macOSDeviceModels contains identifier punctuation: %q", model)
+		}
+		if !canonical[model] {
+			t.Errorf("macOSDeviceModels contains non-canonical model %q", model)
+		}
+	}
+}
+
+func TestIOSDeviceSelectionStable(t *testing.T) {
+	tests := []struct {
+		id   string
+		want deviceInfo
+	}{
+		{"stable-id", deviceInfo{model: "iPhone 6 Plus", version: "12.1.3"}},
+		{"session-1", deviceInfo{model: "iPhone XR", version: "14.4.1"}},
+		{"session-2", deviceInfo{model: "iPhone XR", version: "15.2"}},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.id, func(t *testing.T) {
+			if got := randomIOSDevice(tt.id); got != tt.want {
+				t.Errorf("randomIOSDevice(%q) = %+v, want %+v", tt.id, got, tt.want)
+			}
+		})
+	}
+}
+
+func TestIOSDeviceListOrder(t *testing.T) {
+	versionsByMajor := map[int][]string{
+		12: {
+			"12.0.1",
+			"12.1.4", "12.1.3", "12.1.2", "12.1.1",
+			"12.2",
+			"12.3.2", "12.3.1",
+			"12.4.9", "12.4.8", "12.4.7", "12.4.6", "12.4.5", "12.4.4", "12.4.3", "12.4.2", "12.4.1",
+			"12.5.5", "12.5.4", "12.5.3", "12.5.2", "12.5.1",
+			"12.11.0",
+		},
+		13: {
+			"13.1.3", "13.1.2", "13.1.1",
+			"13.2.3", "13.2.2",
+			"13.3.1",
+			"13.4.1",
+			"13.5.1",
+			"13.6.1",
+			"13.7",
+		},
+		14: {
+			"14.0.1",
+			"14.1",
+			"14.2.1",
+			"14.3",
+			"14.4.2", "14.4.1",
+			"14.5.1",
+			"14.6",
+			"14.7.1",
+			"14.8.1",
+		},
+		15: {
+			"15.0.2", "15.0.1",
+			"15.1.1",
+			"15.2",
+		},
+	}
+
+	list := initIOSDeviceList()
+	index := 0
+	for _, entry := range iOSDeviceModels {
+		for _, suffix := range entry.Suffixes {
+			model := fmt.Sprintf("iPhone %d%s", entry.ID, suffix)
+			if entry.ID == 10 {
+				model = "iPhone X" + suffix
+			}
+			for _, major := range iosAvailableVersions(entry.ID) {
+				for _, version := range versionsByMajor[major] {
+					if index >= len(list) {
+						t.Fatalf("iOS device list ended at index %d", index)
+					}
+					want := deviceInfo{model: model, version: version}
+					if list[index] != want {
+						t.Fatalf("iOS device list entry %d = %+v, want %+v", index, list[index], want)
+					}
+					index++
+				}
+			}
+		}
+	}
+	if index != len(list) {
+		t.Fatalf("iOS device list has %d unexpected trailing entries", len(list)-index)
+	}
+}

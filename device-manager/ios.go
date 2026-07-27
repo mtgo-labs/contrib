@@ -1,6 +1,9 @@
 package device
 
-import "fmt"
+import (
+	"fmt"
+	"sort"
+)
 
 // Auto-generated iOS device models and system versions
 
@@ -64,7 +67,14 @@ func initIOSDeviceList() []deviceInfo {
 				if !ok {
 					continue
 				}
-				for minor, patches := range minorMap {
+				minors := make([]int, 0, len(minorMap))
+				for minor := range minorMap {
+					minors = append(minors, minor)
+				}
+				sort.Ints(minors)
+
+				for _, minor := range minors {
+					patches := minorMap[minor]
 					if len(patches) == 0 {
 						list = append(list, deviceInfo{model: modelStr, version: fmt.Sprintf("%d.%d", major, minor)})
 					} else {

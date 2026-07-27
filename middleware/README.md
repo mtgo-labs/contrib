@@ -3,7 +3,21 @@
 Composable RPC middleware for the `mtgo-labs/raw` client.
 
 ```go
-import "github.com/mtgo-labs/contrib/middleware"
+import (
+    "time"
+
+    "github.com/mtgo-labs/contrib/middleware"
+    "github.com/mtgo-labs/contrib/retry"
+)
+
+retryMiddleware := middleware.NewRetryMiddleware(middleware.RetryOptions{
+    MaxAttempts: 3,
+    Backoff: func() retry.Backoff {
+        return retry.NewExponentialBackoff(retry.ExponentialOptions{
+            InitialInterval: 250 * time.Millisecond,
+        })
+    },
+})
 ```
 
 ## Overview

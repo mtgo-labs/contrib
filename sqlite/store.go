@@ -9,6 +9,7 @@ import (
 )
 
 const sessionKey = "__mtgo_session__"
+
 // Store persists session state in a SQLite database.
 // It implements session.Store for use with raw.Client and exposes repository
 // types (AuthKeys, KV, Peers, RefMessages) for direct access.
@@ -67,6 +68,17 @@ func NewStore(path string) (*Store, error) {
 			);
 			CREATE INDEX IF NOT EXISTS idx_message_refs_peer ON message_refs (peer_id);
 			CREATE INDEX IF NOT EXISTS idx_message_refs ON message_refs (chat_id, msg_id)`},
+		{repo: "ref_messages", version: 2, sql: `
+			DELETE FROM message_refs
+			WHERE rowid <> (
+				SELECT newest.rowid
+				FROM message_refs AS newest
+				WHERE newest.peer_id = message_refs.peer_id
+				ORDER BY newest.msg_id DESC, newest.rowid DESC
+				LIMIT 1
+			);
+			DROP INDEX IF EXISTS idx_message_refs_peer;
+			CREATE UNIQUE INDEX idx_message_refs_peer ON message_refs (peer_id)`},
 		// peers
 		{repo: "peers", version: 1, sql: `
 			CREATE TABLE IF NOT EXISTS peers (
@@ -80,6 +92,16 @@ func NewStore(path string) (*Store, error) {
 			);
 			CREATE INDEX IF NOT EXISTS idx_peers_username ON peers (usernames);
 			CREATE INDEX IF NOT EXISTS idx_peers_phone ON peers (phone)`},
+		{repo: "peers", version: 2, sql: `
+			CREATE TABLE IF NOT EXISTS peer_usernames (
+				peer_id INTEGER NOT NULL,
+				username TEXT NOT NULL,
+				PRIMARY KEY (peer_id, username)
+			);
+			CREATE INDEX IF NOT EXISTS idx_peer_usernames_username
+				ON peer_usernames (username);
+			DROP INDEX IF EXISTS idx_peers_username`,
+			run: migratePeerUsernames},
 	}
 
 	if err := drv.applyMigrations(migrations); err != nil {
@@ -118,8 +140,7 @@ func (s *Store) Save(ctx context.Context, data []byte) error {
 	if len(data) == 0 {
 		return fmt.Errorf("%w: empty snapshot", errors.New("sqlite: empty session data"))
 	}
-	s.KV.Set(sessionKey, data)
-	return nil
+	return s.KV.Set(sessionKey, data)
 }
 
 // Close closes the database connection and releases resources.

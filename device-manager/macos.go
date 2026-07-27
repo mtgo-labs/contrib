@@ -113,31 +113,32 @@ var macOSSystemVersions = []string{
 
 // macOSFromIdentifier converts a macOS model identifier (e.g. MacBookPro16,4) to a human-readable name.
 func macOSFromIdentifier(model string) string {
-	var words []string
-	word := ""
-	for _, ch := range model {
+	family := model
+	for i, ch := range model {
 		if ch >= '0' && ch <= '9' {
-			continue
+			family = model[:i]
+			break
 		}
-		if ch >= 'A' && ch <= 'Z' {
-			if word != "" {
-				words = append(words, word)
-				word = ""
-			}
-		}
-		word += string(ch)
 	}
-	if word != "" {
-		words = append(words, word)
+
+	switch family {
+	case "MacBookPro":
+		return "MacBook Pro"
+	case "MacBookAir":
+		return "MacBook Air"
+	case "MacBook":
+		return "MacBook"
+	case "iMacPro":
+		return "iMac Pro"
+	case "iMac":
+		return "iMac"
+	case "Macmini":
+		return "Mac mini"
+	case "MacPro":
+		return "Mac Pro"
+	default:
+		return family
 	}
-	result := ""
-	for _, w := range words {
-		if result != "" && w != "Mac" && w != "Book" {
-			result += " "
-		}
-		result += w
-	}
-	return result
 }
 
 // macOSDeviceModels is the deduplicated, human-readable model list.

@@ -9,11 +9,11 @@ import (
 type RefMessagesRepo struct {
 	drv *driver
 
-	storeStmt    *sql.Stmt
+	storeStmt     *sql.Stmt
 	getByPeerStmt *sql.Stmt
-	delStmt      *sql.Stmt
+	delStmt       *sql.Stmt
 	delByPeerStmt *sql.Stmt
-	delAllStmt   *sql.Stmt
+	delAllStmt    *sql.Stmt
 }
 
 func newRefMessagesRepo(drv *driver) *RefMessagesRepo {
@@ -27,7 +27,10 @@ func (r *RefMessagesRepo) prepare() error {
 	var err error
 
 	r.storeStmt, err = db.Prepare(
-		`INSERT OR REPLACE INTO message_refs (peer_id, chat_id, msg_id) VALUES (?, ?, ?)`,
+		`INSERT INTO message_refs (peer_id, chat_id, msg_id) VALUES (?, ?, ?)
+		 ON CONFLICT(peer_id) DO UPDATE SET
+			chat_id = excluded.chat_id,
+			msg_id = excluded.msg_id`,
 	)
 	if err != nil {
 		return fmt.Errorf("sqlite: prepare ref_messages.store: %w", err)
