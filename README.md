@@ -22,8 +22,14 @@ client, err := raw.NewClient(raw.Config{
 })
 ```
 
-`netpoll.Dial` returns a standard `net.Conn`, so it plugs directly into
-`raw.Config.DialFunc`. TCP_NODELAY is enabled by default inside netpoll.
+`netpoll.Dial` returns a `net.Conn`-compatible packet connection, so it plugs
+directly into `raw.Config.DialFunc`. On Unix, raw uses CloudWeGo's native
+`Reader` and `Writer` for MTProto framing; Windows retains the standard
+`net.Dialer` fallback. TCP_NODELAY is enabled by default inside netpoll.
+
+For latency-sensitive request/response traffic, `netpoll.NewDialer` accepts an
+optional `ReadSpin` duration that trades bounded CPU time for lower scheduler
+wake-up latency on Unix.
 
 ### utls
 
@@ -101,7 +107,9 @@ The `Store` also exposes repository types for direct use:
 
 ```go
 store.AuthKeys.Set(2, authKey)
-store.KV.Set("my_key", value)
+if err := store.KV.Set("my_key", value); err != nil {
+    log.Fatal(err)
+}
 store.Peers.Store(peer)
 store.RefMessages.Store(peerID, chatID, msgID)
 ```
