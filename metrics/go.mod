@@ -3,7 +3,7 @@ module github.com/mtgo-labs/contrib/metrics
 go 1.26.0
 
 require (
-	github.com/mtgo-labs/raw v0.0.0
+	github.com/mtgo-labs/raw v0.0.0-20260727190936-166dae6136ee
 	github.com/prometheus/client_golang v1.23.2
 )
 
@@ -18,9 +18,4 @@ require (
 	go.yaml.in/yaml/v2 v2.4.2 // indirect
 	golang.org/x/sys v0.35.0 // indirect
 	google.golang.org/protobuf v1.36.8 // indirect
-)
-
-// replace directives for local development (remove before tagging)
-replace (
-	github.com/mtgo-labs/raw => ../../mtcute-go
 )

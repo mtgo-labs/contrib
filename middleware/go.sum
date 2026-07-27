@@ -1,0 +1,4 @@
+github.com/mtgo-labs/contrib/retry v0.0.0-20260727140026-8540b2ac3f6d h1:PkIuT7i3udJulSTyoDrQbirckVZKsAHSLPnSt52yzp0=
+github.com/mtgo-labs/contrib/retry v0.0.0-20260727140026-8540b2ac3f6d/go.mod h1:X48WdCIH/nSQ5RxIiMPLWE4oUqBCYILkWkH7i/gxAOU=
+github.com/mtgo-labs/raw v0.0.0-20260727190936-166dae6136ee h1:TynstCa8jl3P/sDvdpIRLycFJcwOxnjThvnVNkRdNNk=
+github.com/mtgo-labs/raw v0.0.0-20260727190936-166dae6136ee/go.mod h1:LhC7IQOZ4Tko7PzcX2cr2gNDAvoc+sfpHWHwlFEwP5A=

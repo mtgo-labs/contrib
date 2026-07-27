@@ -3,7 +3,7 @@ module github.com/mtgo-labs/contrib/sqlite
 go 1.26.0
 
 require (
-	github.com/mtgo-labs/raw v0.0.0
+	github.com/mtgo-labs/raw v0.0.0-20260727190936-166dae6136ee
 	modernc.org/sqlite v1.54.0
 )
 
@@ -18,5 +18,3 @@ require (
 	modernc.org/mathutil v1.7.1 // indirect
 	modernc.org/memory v1.11.0 // indirect
 )
-
-replace github.com/mtgo-labs/raw => ../../mtcute-go
