@@ -4,7 +4,6 @@ import (
 	"context"
 	"crypto/rand"
 	"encoding/binary"
-	"math"
 	"time"
 
 	raw "github.com/mtgo-labs/raw"
@@ -38,6 +37,11 @@ func (c *baseContext) Stop() { c.propagation = propagationStop }
 
 // StopChildren stops all groups and skips child dispatchers entirely.
 func (c *baseContext) StopChildren() { c.propagation = propagationStopChildren }
+// setPropagation sets the propagation action (internal, used by dispatch loop).
+func (c *baseContext) setPropagation(a propagationAction) { c.propagation = a }
+
+// getPropagation returns the current propagation action (internal).
+func (c *baseContext) getPropagation() propagationAction { return c.propagation }
 
 // ---------------------------------------------------------------------------
 // MessageContext
@@ -451,4 +455,3 @@ func (peerNotResolvedError) Error() string {
 	return "dispatcher: peer access hash not resolved (not in peers index)"
 }
 
-var _ = math.MaxInt64
