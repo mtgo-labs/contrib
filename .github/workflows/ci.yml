@@ -1,0 +1,57 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    strategy:
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+      fail-fast: false
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.26'
+          cache: true
+      - name: Clone raw for replace directives
+        run: git clone --depth=1 https://github.com/mtgo-labs/raw ../mtcute-go
+      - name: Test all modules
+        run: |
+          set -e
+          for pkg in */; do
+            pkg="${pkg%/}"
+            [ -f "$pkg/go.mod" ] || continue
+            echo "::group::$pkg"
+            (cd "$pkg" && go test -race -v ./...)
+            echo "::endgroup::"
+          done
+
+  lint:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.26'
+          cache: true
+      - name: Clone raw for replace directives
+        run: git clone --depth=1 https://github.com/mtgo-labs/raw ../mtcute-go
+      - name: Install staticcheck
+        run: go install honnef.co/go/tools/cmd/staticcheck@latest
+      - name: Vet and staticcheck all modules
+        run: |
+          set -e
+          for pkg in */; do
+            pkg="${pkg%/}"
+            [ -f "$pkg/go.mod" ] || continue
+            echo "::group::$pkg"
+            (cd "$pkg" && go vet ./... && staticcheck ./...)
+            echo "::endgroup::"
+          done
