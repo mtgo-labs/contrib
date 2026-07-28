@@ -4,6 +4,26 @@ Contrib transport and utility packages for [mtgo-labs/raw](https://github.com/mt
 
 ## Packages
 
+### compression
+
+Gzip compression backed by
+[`github.com/klauspost/compress/gzip`](https://github.com/klauspost/compress/tree/v1.19.1/gzip).
+
+```go
+compressed, err := compression.Gzip(data, compression.LevelDefault)
+if err != nil {
+    log.Fatal(err)
+}
+
+data, err = compression.Gunzip(compressed, 16<<20)
+if err != nil {
+    log.Fatal(err)
+}
+```
+
+`Gunzip` accepts a decompressed-size limit to prevent memory exhaustion when
+processing untrusted input. This module provides gzip only.
+
 ### netpoll
 
 CloudWeGo/netpoll epoll-based transport for Linux.
