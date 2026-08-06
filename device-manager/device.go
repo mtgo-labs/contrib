@@ -32,6 +32,8 @@ const (
 	Android Device = "android"
 	// AndroidX is the Telegram-X Android client.
 	AndroidX Device = "android_x"
+	// Plus is the Plus Messenger Android client.
+	Plus Device = "plus"
 	// IOS is the official Telegram iOS client.
 	IOS Device = "ios"
 	// MacOS is the official Telegram macOS client.
@@ -206,6 +208,18 @@ func TelegramAndroidX() Profile {
 	}
 }
 
+// TelegramPlus returns a static profile mimicking Plus Messenger for Android.
+func TelegramPlus() Profile {
+	return Profile{
+		DeviceModel:    "Samsung SM-G998B",
+		SystemVersion:  "SDK 31",
+		AppVersion:     "8.4.1 (2522)",
+		LangCode:       "en",
+		SystemLangCode: "en-US",
+		LangPack:       "android",
+	}
+}
+
 // TelegramIOS returns a static profile mimicking the official Telegram iOS app.
 func TelegramIOS() Profile {
 	return Profile{
@@ -306,6 +320,13 @@ func GenerateAndroid(uniqueID string) Profile {
 // GenerateAndroidX generates a randomized Telegram-X Android profile.
 func GenerateAndroidX(uniqueID string) Profile {
 	base := TelegramAndroidX()
+	info := randomAndroidDevice(uniqueID)
+	return base.WithDevice(info.model, info.version)
+}
+
+// GeneratePlus generates a randomized Plus Messenger Android profile.
+func GeneratePlus(uniqueID string) Profile {
+	base := TelegramPlus()
 	info := randomAndroidDevice(uniqueID)
 	return base.WithDevice(info.model, info.version)
 }

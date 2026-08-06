@@ -209,6 +209,23 @@ func TestGenerateAndroidNonEmpty(t *testing.T) {
 	}
 }
 
+
+func TestTelegramPlus(t *testing.T) {
+	p := TelegramPlus()
+	if p.LangPack != "android" {
+		t.Errorf("expected LangPack 'android', got %q", p.LangPack)
+	}
+}
+
+func TestDeviceGeneratePlus(t *testing.T) {
+	p := Plus.Generate("test-session")
+	if p.DeviceModel == "" {
+		t.Error("expected non-empty DeviceModel")
+	}
+	if p.SystemVersion == "" {
+		t.Error("expected non-empty SystemVersion")
+	}
+}
 func TestTelegramWebogram(t *testing.T) {
 	p := TelegramWebogram()
 	if p.AppVersion != "0.7.0" {
@@ -225,7 +242,7 @@ func TestDeviceGenerateWebogram(t *testing.T) {
 
 func TestConcurrentGenerate(t *testing.T) {
 	// All device types — exercises every lazy-init path concurrently.
-	devices := []Device{Android, AndroidX, IOS, MacOS, Windows, Linux, Desktop}
+	devices := []Device{Android, AndroidX, Plus, IOS, MacOS, Windows, Linux, Desktop}
 
 	var wg sync.WaitGroup
 	for range 200 {

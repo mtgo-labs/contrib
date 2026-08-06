@@ -21,7 +21,7 @@
 //	// ...
 //
 // Features:
-//   - 10 device types (Android, iOS, Desktop, etc.)
+//   - 11 device types (Android, AndroidX, Plus, iOS, Desktop, etc.)
 //   - Deterministic generation from unique IDs
 //   - Official Telegram client presets
 //   - Thread-safe lazy initialization
